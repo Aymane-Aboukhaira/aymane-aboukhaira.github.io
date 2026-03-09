@@ -1,6 +1,6 @@
 ---
 title: "Hybrid Cloud Lab Part 2: Hypervisor & Virtualization Foundation"
-date: 2026-03-10 10:00:00 +0000
+date: 2026-03-10 11:00:00 +0000
 categories: [IT Infrastructure, Virtualization]
 tags: [proxmox, pfsense, networking, hardware-troubleshooting]
 ---
