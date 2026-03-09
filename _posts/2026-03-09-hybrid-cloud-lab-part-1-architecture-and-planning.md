@@ -1,6 +1,6 @@
 ---
 title: "Hybrid Cloud Lab Part 1: The Vision & Architecture"
-date: 2026-03-09 10:00:00 +0000
+date: 2026-03-02 10:00:00 +0000
 categories: [IT Infrastructure, Cloud Computing]
 tags: [architecture, planning, virtualization, hybrid-cloud]
 ---
