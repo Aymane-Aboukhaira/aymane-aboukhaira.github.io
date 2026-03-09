@@ -1,6 +1,6 @@
 ---
 title: "Hybrid Cloud Lab Part 5: Hybrid Connectivity & Secure Access"
-date: 2026-03-13 14:00:00 +0000
+date: 2026-03-06 14:00:00 +0000
 categories: [IT Infrastructure, Cloud Computing]
 tags: [aws, vpn, ipsec, guacamole, security]
 ---
