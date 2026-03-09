@@ -1,6 +1,6 @@
 ---
 title: "Hybrid Cloud Lab Part 4: Enterprise Identity & Monitoring"
-date: 2026-03-12 13:00:00 +0000
+date: 2026-03-05 13:00:00 +0000
 categories: [IT Infrastructure, Administration]
 tags: [active-directory, windows-server, prometheus, grafana]
 ---
