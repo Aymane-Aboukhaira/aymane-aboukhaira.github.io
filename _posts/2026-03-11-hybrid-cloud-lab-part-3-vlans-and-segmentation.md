@@ -1,6 +1,6 @@
 ---
 title: "Hybrid Cloud Lab Part 3: VLANs & Zero-Trust Segmentation"
-date: 2026-03-11 12:00:00 +0000
+date: 2026-03-04 12:00:00 +0000
 categories: [IT Infrastructure, Networking]
 tags: [pfsense, vlans, security, zero-trust]
 ---
