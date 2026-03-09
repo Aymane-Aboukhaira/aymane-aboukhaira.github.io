@@ -5,46 +5,77 @@ categories: [IT Infrastructure, Networking]
 tags: [pfsense, vlans, security, zero-trust]
 ---
 
-# Hybrid Cloud Lab Part 3: VLANs & Zero-Trust Segmentation
 
-A "flat" network where every device can talk to every other device is a security nightmare. If one machine is compromised, the attacker has a direct path to everything else. This is why **Network Segmentation** is a cornerstone of enterprise security.
+# Hybrid Cloud Lab — Part 3: Zero-Trust VLAN Segmentation
 
-In Part 3 of this series, I’m digging into how I implemented a **Zero-Trust** architecture using VLANs and pfSense.
+A "flat" network where every device can communicate with every other device is a massive security vulnerability. In this post, I detail the transition from a flat `192.168.1.0/24` subnet to a segmented **Zero-Trust** architecture using VLANs and pfSense.
 
-## The VLAN Strategy
+---
 
-I divided my lab into four distinct networks, each with its own purpose and security level:
+## 1. The Vulnerability of Flat Networks
 
-| VLAN | Name | Purpose |
+In my initial setup, a compromise of `centos-vm1` (web application) would have granted an attacker direct Layer 3 access to:
+- **DC01**: The domain controller and all Active Directory credentials.
+- **OMV-NAS**: All centralized storage data.
+- **Monitoring**: The ability to disable alerts and hide their tracks.
+
+### Comparison: Before vs. After
+| Scenario | Flat Network | Zero-Trust Segmentation |
 |---|---|---|
-| **10** | MGMT | Management traffic, Active Directory, Domain Controller. |
-| **20** | SERVICES | Infrastructure services like Prometheus and Grafana monitoring. |
-| **30** | DMZ | Isolated network for public-facing web applications. |
-| **40** | STORAGE | Restricted segment for NAS storage (SMB/NFS). |
+| DMZ Compromised → DC01 | Direct Access | **BLOCKED** — DMZ-to-MGMT rule |
+| DMZ Compromised → NAS | Direct Access | **BLOCKED** — DMZ-to-STORAGE rule |
+| DMZ Compromised → Monitoring | Direct Access | **BLOCKED** — DMZ-to-SERVICES rule |
+| DMZ → Internet | Allowed | **ALLOWED** — DMZ-to-WAN rule |
 
-## The Proxmox "Virtual Bridge" Challenge
+---
 
-Implementing VLAN tags (802.1Q) on a virtual bridge in Proxmox turned out to be more complex than expected. Proxmox requires at least one physical NIC attached to a VLAN-aware bridge to validate it. Since my internal bridge (`vmbr1`) was purely virtual, my VMs wouldn't boot.
+## 2. VLAN Strategy — Segmentation Plan
 
-The solution? A **Kernel Dummy Interface**. I injected a dummy NIC via the Linux kernel, bound it to the bridge, and suddenly everything clicked into place:
+| VLAN | Name | Subnet | pfSense Gateway | DNS | Access Allowed From |
+|---|---|---|---|---|---|
+| 10 | MGMT | 192.168.10.0/24 | 192.168.10.1 | 192.168.10.10 | Admins Only |
+| 20 | SERVICES | 192.168.20.0/24 | 192.168.20.1 | 192.168.10.10 | MGMT + specified VLANs |
+| 30 | DMZ | 192.168.30.0/24 | 192.168.30.1 | 8.8.8.8 | Internet Only |
+| 40 | STORAGE | 192.168.40.0/24 | 192.168.40.1 | 192.168.10.10 | MGMT + SERVICES |
+
+---
+
+## 3. pfSense Firewall Rules
+
+I adopted a **deny-by-default** philosophy. Unless explicitly permitted, all traffic is blocked.
+
+### DMZ Interface (VLAN 30) Isolation
+1.  **BLOCK** | Src: DMZ net | Dst: MGMT (192.168.10.0/24) | *Prevents lateral movement to AD.*
+2.  **BLOCK** | Src: DMZ net | Dst: SERVICES (192.168.20.0/24) | *Protects the monitoring stack.*
+3.  **BLOCK** | Src: DMZ net | Dst: STORAGE (192.168.40.0/24) | *Impossible to exfiltrate data from NAS.*
+4.  **PASS**  | Src: DMZ net | Dst: !RFC1918 | *Allows only public Internet access.*
+
+### IPsec Interface Rules
+One of the most critical steps is permitting traffic from the AWS VPC.
+- **PASS** | Src: 10.0.0.0/16 | Dst: VLAN subnets | *Enables Guacamole-to-LDAP and RDP/SSH sessions.*
+
+---
+
+## 4. Proxmox Workaround: The Dummy Interface
+
+In Proxmox 9.1.1, a `bridge-vlan-aware` bridge requires at least one port to be initialized. Since my internal bridge `vmbr1` was virtual, I had to use a kernel **dummy interface** as a placeholder:
 
 ```bash
+# /etc/network/interfaces excerpt
 auto dummy0
 iface dummy0 inet manual
-    # Create a virtual dummy interface to satisfy Proxmox's bridge validation
     pre-up ip link add dummy0 type dummy || true
+
+auto vmbr1
+iface vmbr1 inet manual
+    bridge-ports dummy0
+    bridge-vlan-aware yes
 ```
 
-## Enforcing the Zero-Trust Matrix
+Without this workaround, every VM with a VLAN tag failed to boot with a `QEMU exit code 1`.
 
-With the VLANs established, I defined strict firewall rules in pfSense to control inter-VLAN traffic. The goal was simple: **"Block by default, allow by exception."**
+---
 
-For example, a machine in the **DMZ (VLAN 30)** can access the internet to serve web traffic, but it is explicitly blocked from even "seeing" the **Management (VLAN 10)** or **Storage (VLAN 40)** networks. If an attacker compromises a web app, they are stuck in a digital "dead end."
+## Next Part
 
-## The Pivot to Enterprise
-
-This segmentation wasn't just for show; it was a response to real feedback. My initial design was flat, and moving to this model taught me exactly how much overhead—and security—comes with enterprise-grade networking.
-
-In the next part, we'll look at the "brains" inside these VLANs: **Active Directory** and my **Centralized Monitoring** stack.
-
-Stay tuned for Part 4!
+**[Part 4 → Enterprise Identity & Monitoring](/posts/hybrid-cloud-lab-part-4-identity-and-monitoring/)** — Configuring Active Directory and the Prometheus stack.

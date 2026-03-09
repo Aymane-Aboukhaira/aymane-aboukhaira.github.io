@@ -5,49 +5,61 @@ categories: [IT Infrastructure, DevOps]
 tags: [storage, backups, automation, bash, disaster-recovery]
 ---
 
-# Hybrid Cloud Lab Part 6: Resilience & Automation
 
-We’ve reached the final part of my Hybrid Cloud Infrastructure Lab series. We’ve built the network, the identity system, and the cloud bridge. But no infrastructure is complete without a solid safety net. Today, I’m talking about **Storage, Disaster Recovery (DR), and Automation.**
+# Hybrid Cloud Lab — Part 6: Resilience & Automation
 
-## Persistent Storage with OpenMediaVault
+We’ve reached the final part of my Hybrid Cloud Infrastructure Lab series. Today, I’m detailing the "Safety Net:" how I automated the most frustrating parts of IP management and implemented a 3-tier disaster recovery (DR) strategy that guarantees data survival.
 
-In an enterprise environment, data needs a central home. I deployed **OpenMediaVault (OMV)** on a lightweight VM (1GB RAM) to act as my lab’s Network Attached Storage (NAS).
+---
 
-OMV provides:
-- **SMB Shares**: Easily accessible from the Windows Management workstation.
-- **NFS Mounts**: Mounted persistently on my CentOS application servers for low-latency file access.
+## 1. The Dynamic IP Deadlock
 
-The key lesson here was managing persistence. Using `/etc/fstab` with the `_netdev` option ensured that my servers wouldn't hang on boot if the NAS was still starting up—a small but critical detail for system stability.
+Residential ISPs assign dynamic public IPs. When your home IP changes, three things break simultaneously:
+1.  **AWS Security Group**: The old IP is no longer authorized for SSH/IPsec.
+2.  **Fail2ban `ignoreip`**: You risk being banned from your own server.
+3.  **IPsec Tunnel**: The SG blocks the new IP, killing the VPN.
 
-## The Three-Tier Disaster Recovery Strategy
+### The Self-Healing Architecture
+I solved this with a two-layer synchronization system:
+- **On-Premise Cron**: Every 5 minutes, a CentOS VM updates a **DuckDNS** hostname with the current home IP.
+- **AWS Script (`update-sg-ip.sh`)**: Every 5 minutes, EC2 resolves the DuckDNS hostname, compares it to the SG rules, and updates them automatically if a change is detected.
 
-"Backup" is just a copy; "Disaster Recovery" is a plan. I implemented a three-tier strategy to ensure that even a total hardware failure wouldn't wipe out months of work.
+```bash
+# update-sg-ip.sh logic excerpt
+HOME_IP=$(dig +short $DDNS_HOST | tail -1)
+CURRENT_SG_IP=$(aws ec2 describe-security-groups --group-ids $SG_ID ...)
 
-1.  **Tier 1 (Physical)**: An air-gapped USB drive containing full full-VM snapshots (.vma.zst) for one-click restoration via the Proxmox GUI.
-2.  **Tier 2 (Cloud Edge)**: Daily automated backups of EC2 configurations (Nginx, Guacamole, IPsec) to an **AWS S3** bucket.
-3.  **Tier 3 (Cloud On-Prem)**: A centralized script on `centos-vm2` that pulls the pfSense configuration and monitoring data, then uploads it to S3 through the IPsec tunnel.
+if [ "$HOME_IP" != "$CURRENT_SG_IP" ]; then
+    aws ec2 authorize-security-group-ingress --cidr ${HOME_IP}/32 ...
+    sed -i "s|ignoreip = .*|ignoreip = 127.0.0.1/8 $HOME_IP|" /etc/fail2ban/jail.local
+    systemctl restart fail2ban
+fi
+```
 
-### Ransomware Protection
-My S3 bucket uses a **write-only IAM policy**. The backup script can upload files, but it doesn't have the permission to delete or overwrite them. Coupled with S3 versioning, this means even if a script is compromised, the historical backups stay safe.
+---
 
-## Self-Healing Automation
+## 2. 3-Tier Disaster Recovery (3-2-1 Rule)
 
-One of my favorite features of this lab is its ability to "heal" itself. Because I have a dynamic ISP IP, the AWS Security Groups would frequently block my traffic after an IP rotation.
+I implemented a strategy to ensure that even a total hardware failure on-premise or a compromised cloud instance wouldn't be fatal.
 
-I wrote a bash script that runs every 5 minutes:
-1.  Queries **DuckDNS** for my current home IP.
-2.  Compares it to the IP allowed in the AWS Security Group.
-3.  Updates the Security Group via the AWS CLI if they don’t match.
+| Tier | Media | Location | Frequency | Content |
+|---|---|---|---|---|
+| **1** | USB EXT4 (Air-gapped) | On-site | Manual | Full VM Snapshots (.vma.zst) |
+| **2** | AWS S3 (Stochastic) | Cloud | Daily 2 AM | EC2 Configs: NPM, Guacamole, IPsec |
+| **3** | AWS S3 (Stochastic) | Cloud | Daily 3 AM | pfSense `config.xml`, Monitoring, DBs |
 
-This turned a frustrating manual task into a background process that just works.
+### Anti-Ransomware Protection
+The S3 bucket uses a **write-only IAM policy**. The backup bot can `PutObject`, but it cannot `DeleteObject`. With S3 Versioning enabled, this means that even if the backup credentials are stolen, the historical backups cannot be purged.
 
-## Conclusion: The Lab is Never Finished
+---
 
-Building this lab has been the most challenging and rewarding experience of my studies. It taught me that enterprise engineering isn't just about knowing the tools; it's about understanding the "why" behind the architecture.
+## 3. Conclusion: The Lab is Never Finished
 
-The lab is running, segmented, and secure—but it’s not finished. Next, I’m looking at Ansible for orchestration and Terraform to codify my AWS setup.
+Building this was a deep dive into the realities of modern sysadmin work. It taught me that enterprise engineering isn't just about the initial deploy; it's about the automation that keeps the system alive and the backups that give you sleep at night.
 
-Thank you for following along with this series. I hope it inspires you to build your own infrastructure!
+The full repository with all configurations and scripts is available on my GitHub.
+
+Thank you for following along with this 6-part journey!
 
 **Aymane Aboukhaira**
 *Networks & Systems — ISMONTIC, Tangier*

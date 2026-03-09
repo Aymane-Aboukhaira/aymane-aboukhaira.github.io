@@ -5,41 +5,76 @@ categories: [IT Infrastructure, Administration]
 tags: [active-directory, windows-server, prometheus, grafana]
 ---
 
-# Hybrid Cloud Lab Part 4: Enterprise Identity & Monitoring
 
-Once your network is carved into secure segments, you need the "brains" to manage who is who and whether everything is still running. In this post, I’m covering the two pillars of my Management (VLAN 10) and Services (VLAN 20) networks: **Active Directory** and **Prometheus Monitoring**.
+# Hybrid Cloud Lab — Part 4: Multi-Layer Security & Identity
 
-## Active Directory: The Identity Hub
+In this part, I detail the **Defense-in-Depth** strategy implemented on the cloud edge. This isn't just about setting a password; it's about having three independent security layers that cover different failure modes.
 
-I deployed **Windows Server 2022 (DC01)** on a tight budget of 2GB RAM. Despite the hardware constraints, it successfully handles:
-- **AD DS**: Managing users and computers for the `lab.local` domain.
-- **DNS**: acting as the authoritative source for the lab, with forwarders to 8.8.8.8.
-- **DHCP**: Assigning IPs to devices within the management network.
+| Threat | Mitigation | Layer |
+|---|---|---|
+| Guacamole Brute Force | Fail2ban (5 attempts = 1h ban) | 2 |
+| Stolen AD Credentials | TOTP MFA (Physical factor) | 3 |
+| Port Scans / Vulnerabilities | AWS Security Group (Minimalist) | 1 |
+| Unauthorized SSH Access | SG: Home IP only + RSA Key | 1 |
+| IAM S3 Ransomware | IAM write-only policies | 1 |
 
-The real "win" with AD was getting it to talk to the rest of the lab. Every Linux VM in my infrastructure authenticates against this domain, creating a centralized, enterprise-grade identity system.
+---
 
-## Centralized Monitoring with Prometheus & Grafana
+## 1. Layer 1 — AWS Security Group
 
-You can't manage what you can't measure. I deployed a full monitoring stack on `centos-vm2` using **Podman** and **Prometheus**.
+The first perimeter acts at the AWS network level, dropping packets before they even reach the OS.
 
-### The Monitoring Stack
-- **Prometheus**: Collects and stores metrics from across the entire lab.
-- **Grafana**: Provides beautiful, real-time dashboards to visualize host health.
-- **Exporters**: Lightweight agents that feed data to Prometheus.
+| Port | Protocol | Source | Usage |
+|---|---|---|---|
+| 443 | TCP | 0.0.0.0/0 | HTTPS for Guacamole |
+| 22 | TCP | Home IP /32 | SSH Administration |
+| 500/4500 | UDP | Home IP /32 | IPsec IKE/NAT-T |
 
-I installed **Node Exporter** on all my Linux VMs and **Windows Exporter** on the domain controller. Within minutes, I had a single pane of glass showing CPU load, memory usage, and disk I/O across my entire infrastructure.
+---
 
-```mermaid
-graph LR
-    DC01[Windows DC] -- "Windows Exporter (9182)" --> Prometheus
-    VM1[CentOS App] -- "Node Exporter (9100)" --> Prometheus
-    NAS[OMV NAS] -- "Node Exporter (9100)" --> Prometheus
-    Prometheus -- "Data Source" --> Grafana
+## 2. Layer 2 — Fail2ban in a Docker Environment
+
+One major challenge was that Docker bypasses the standard `iptables` INPUT chain. A standard Fail2ban setup does **nothing** for containerized services.
+
+### The Solution: DOCKER-USER Chain
+I configured Fail2ban to inject rules into the `DOCKER-USER` chain, which is the only chain Docker checks before its own routing rules.
+
+```bash
+# Example NPM audit filter targeting the DOCKER-USER chain
+[npm-docker]
+enabled = true
+filter  = npm-general
+logpath = /opt/npm/data/logs/proxy-host-*_access.log
+action  = iptables-multiport[
+    name="npm-docker",
+    port="http,https",
+    protocol="tcp",
+    chain="DOCKER-USER"]
 ```
 
-### Why it Matters
-Watching all my Prometheus targets go green for the first time was the moment this project moved from a collection of VMs to a cohesive system. It gives you the confidence to know that if a service fails, you'll see the alert before a user even notices.
+---
 
-In the next part, we'll cross the bridge into the cloud: setting up the **IPsec VPN** to AWS and enabling **Secure Remote Access**.
+## 3. Layer 3 — TOTP MFA + AD LDAP
 
-See you in Part 5!
+For the final layer, I implemented a multi-factor authentication flow that traverses the IPsec tunnel to authenticate against my local Active Directory.
+
+### Authentication Flow:
+1.  **User enters credentials**: Username + Password.
+2.  **LDAP Validation**: Guacamole connects to `192.168.10.10` (DC01) via the IPsec tunnel to verify.
+3.  **TOTP Prompt**: If valid, the user must enter a 6-digit code from a physical device (Google Authenticator).
+4.  **Access Granted**: The encrypted RDP session is established.
+
+```yaml
+# Guacamole Environment Configuration
+LDAP_HOSTNAME: 192.168.10.10
+LDAP_USER_BASE_DN: CN=Users,DC=lab,DC=local
+TOTP_ENABLED: "true"
+```
+
+This ensures that even if an attacker has your password, they are still blocked by the physical factor and the network-level IP whitelist.
+
+---
+
+## Next Part
+
+**[Part 5 → Hybrid Connectivity & Secure Access](/posts/hybrid-cloud-lab-part-5-vpn-and-remote-access/)** — Connecting it all together with the IPsec Site-to-Site tunnel.
